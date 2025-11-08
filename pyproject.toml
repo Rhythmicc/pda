@@ -1,0 +1,34 @@
+[build-system]
+requires = [ "poetry-core",]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "parseDblpAbstract"
+version = "0.1.1"
+description = "parse DBLP abstract"
+authors = [ "Rhythmicc <rhythmlian.cn@gmail.com>",]
+license = "MIT"
+readme = "README.md"
+
+[tool.qpro]
+[[tool.qpro.server_targets]]
+user = "lianhaocheng"
+host = "localhost"
+port = 22
+path = "/opt/homebrew/lib/python3.11/site-packages/"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+qpro = "^0.13.0"
+quickstart-rhy = "^0.7.4"
+
+[tool.poetry.scripts]
+pda = "parseDblpAbstract.main:main"
+
+[tool.qpro.config]
+build = ""
+entry_point = "parseDblpAbstract/main.py"
+executable = "python3 -m parseDblpAbstract.main"
+input_file = ""
+template_root = ""
+enable_complete = true

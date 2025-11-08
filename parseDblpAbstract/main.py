@@ -104,7 +104,7 @@ def parse_dois(papers: list):
     QproDefaultStatus.stop()
 
 @app.command()
-def deal(path: str, within_years: int = 5):
+def deal(path: str, within_years: int = 0):
     """
     处理 dblp 搜索结果页面，生成每篇论文的摘要
 
@@ -129,7 +129,7 @@ def deal(path: str, within_years: int = 5):
             else:
                 QproDefaultConsole.print(QproErrorString, f"Unknown paper: {item['info']}")
             continue
-        if int(item['info']['year']) < current_year - within_years:
+        if within_years and int(item['info']['year']) < current_year - within_years:
             delete.append(item['info'].get('ee', 'NEED_DELETE'))
     for url in delete:
         for _id, item in enumerate(_data['result']['hits']['hit']):
@@ -152,7 +152,7 @@ def ai_auto_detect(path: str, content: str):
     :param path: json file
     :param content: content
     """
-    from QuickStart_Rhy.API.ChatGPT import chatGPT
+    from QuickStart_Rhy.API.GPT import ChatGPT
     from QuickStart_Rhy.apiTools import translate
     import re
 
@@ -178,7 +178,11 @@ def ai_auto_detect(path: str, content: str):
 
         QproDefaultStatus.update(f"识别: {item['info']['title']}")
         if 'abstract-check' not in item['info']:
-            check = chatGPT(f"请判断下述论文摘要与\"{content}\"的相关程度, 给出0到100之间的分数, 0表示毫无关系, 100表示密切相关:\n{item['info']['abstract']}\n\n", True, True)
+            check = ChatGPT(f"请判断下述论文摘要与\"{content}\"的相关程度, 给出0到100之间的分数, 0表示毫无关系, 100表示密切相关:\n{item['info']['abstract']}\n\n")
+            res = ''
+            for item in check:
+                res = item
+            check = res
             item['info']['abstract-check'] = check
         else:
             check = item['info']['abstract-check']
@@ -234,7 +238,7 @@ def ai_auto_detect(path: str, content: str):
             item['info']['abstract-zh'] = abstract
         QproDefaultStatus.update(f"GPT-3 总结: {item['info']['title']}")
         if 'abstract-gpt' not in item['info']:
-            item['info']['abstract-gpt'] = chatGPT(f"请帮我将如下论文摘要用100字以内的中文概括:\n{item['info']['abstract-zh']}\n\n", True, True)
+            item['info']['abstract-gpt'] = ChatGPT(f"请帮我将如下论文摘要用100字以内的中文概括:\n{item['info']['abstract-zh']}\n\n", True, True)
         QproDefaultConsole.print(QproInfoString, f"GPT-3 总结: [bold green]{item['info']['abstract-gpt']}[/]")
         save()
     QproDefaultStatus.stop()
@@ -242,21 +246,91 @@ def ai_auto_detect(path: str, content: str):
 
 # 统计
 @app.command()
-def stat():
+def stat(ls: list, disable_cur_year: bool = False):
     """
     统计当前数据
     """
-    ls = os.listdir(os.getcwd())
-    ls = [i for i in ls if i.endswith(".json")]
+    import datetime
 
-    total = 0
+    ls = [i for i in ls if i.endswith(".json")]
+    cur_year = str(datetime.datetime.now().year)
+
+    ss = set()
     for i in ls:
         with open(os.path.join(os.getcwd(), i), "r") as f:
             import json
             data = json.load(f)
-        total += len(data['result']['hits']['hit'])
-    QproDefaultConsole.print(QproInfoString, f"Total: {total}")
+        # total += len(data['result']['hits']['hit'])
+        for item in data['result']['hits']['hit']:
+            if 'ee' not in item['info']:
+                continue
+            if item['info']['year'] == cur_year and disable_cur_year:
+                continue
+            ss.add(item['info']['ee'])
+    QproDefaultConsole.print(QproInfoString, f"Total: {len(ss)}")
+    return len(ss), cur_year
 
+
+@app.command()
+def draw(title: str, ls: list, disable_cur_year: bool = False):
+    # draw trend
+    import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
+    import matplotlib
+    import numpy as np
+
+    ls = [i for i in ls if i.endswith(".json")]
+    keywords = set([i.split('-')[0] for i in ls])
+    QproDefaultConsole.print(QproInfoString, f"Keywords: {keywords}")
+    total_num, cur_year = app.real_call('stat', ls, disable_cur_year)
+
+    fm.fontManager.addfont('/Users/lianhaocheng/Library/Fonts/微软雅黑.ttf')
+
+    # 设置字体名称，注意这里不是路径
+    plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
+    matplotlib.rcParams['axes.unicode_minus'] = False
+
+    year_set = set()
+    paper_set = set()
+    count_year = {}
+
+    for i in ls:
+        with open(os.path.join(os.getcwd(), i), "r") as f:
+            import json
+            data = json.load(f)
+        for item in data['result']['hits']['hit']:
+            if 'ee' not in item['info'] or item['info']['ee'] in paper_set:
+                continue
+            # 依据venue和year统计
+            if item['info']['venue'] not in count_year:
+                count_year[item['info']['venue']] = {}
+            if item['info']['year'] == cur_year and disable_cur_year:
+                continue
+            if item['info']['year'] not in count_year[item['info']['venue']]:
+                count_year[item['info']['venue']][item['info']['year']] = 0
+            count_year[item['info']['venue']][item['info']['year']] += 1
+            paper_set.add(item['info']['ee'])
+            year_set.add(item['info']['year'])
+    # count_year = sorted(count_year.items(), key=lambda x: x[0])
+    # 画堆叠柱状图
+    years = sorted(list(year_set), key=lambda x: int(x))
+    venues = list(count_year.keys())
+    venues.sort()
+    bottom = np.zeros(len(years))
+    for i, venue in enumerate(venues):
+        ls = [count_year[venue].get(year, 0) for year in years]
+        plt.bar(years, ls, bottom=bottom, label=venue)
+        bottom += np.array(ls)
+    plt.xlabel('年份', fontsize=16)
+    plt.ylabel('数量', fontsize=16)
+    # int yticks
+    plt.yticks([i for i in range(0, int(max(bottom)) + 1, 5)], fontsize=16)
+    plt.xticks(fontsize=16)
+    plt.legend(loc='best', fontsize=16)
+    plt.title(f'{title}: {total_num}', fontsize=16)
+    plt.tight_layout()
+    plt.savefig('trend.svg', format='svg')
+    # plt.show()
 
 @app.command()
 def table(name: str, paths: list):
@@ -267,8 +341,8 @@ def table(name: str, paths: list):
     """
     import re
     with open(f'{name}.md', 'w', encoding='utf-8') as f:
-        f.write(f"|年份|会议|论文标题|GPT-3 相关性|总结|\n")
-        f.write(f"|---|---|---|---|---|\n")
+        f.write(f"|年份|会议|论文标题|摘要|\n")
+        f.write(f"|---|---|---|---|\n")
         total_data = []
         for path in paths:
             with open(path, "r") as jf:
@@ -281,6 +355,8 @@ def table(name: str, paths: list):
             if item['info']['ee'] in writed:
                 continue
             check = item['info'].get('abstract-gpt', '').replace('\n', ' ')
+            if not check:
+                check = item['info'].get('abstract', '').replace('\n', ' ')
             bib = item['info'].get('bib', '')
             if isinstance(item['info']['authors']['author'], dict):
                 author = item['info']['authors']['author']['text']
@@ -292,12 +368,13 @@ def table(name: str, paths: list):
             citation = re.findall(r'@.*?{(.*?),', bib)[0]
             citation = "\\cite{" + citation + "}"
             bib = author + "等人" + check + citation
-            f.write(f"|{item['info']['year']}|{item['info']['venue']}|[{item['info']['title']}]({item['info']['ee']})|{item['info'].get('trend', '')}|{bib}|\n")
+            # f.write(f"|{item['info']['year']}|{item['info']['venue']}|[{item['info']['title']}]({item['info']['ee']})|{item['info'].get('trend', '')}|{bib}|\n")
+            f.write(f"|{item['info']['year']}|{item['info']['venue']}|[{item['info']['title']}]({item['info']['ee']})|{bib}|\n")
             writed.add(item['info']['ee'])
 
 
 @app.command()
-def dblp(keyword: str, is_exact: bool = False, venue: str = '', year: int = 0, journal: bool = False):
+def dblp(keyword: str = '', is_exact: bool = False, venue: str = '', year: int = 0, journal: bool = False):
     """
     从dblp爬取数据
 
@@ -324,7 +401,7 @@ def dblp(keyword: str, is_exact: bool = False, venue: str = '', year: int = 0, j
     # risc-v streamid:conf/micro: type:Conference_and_Workshop_Papers:&h=1000&format=json
     import requests
     
-    root_domain = ['dblp.org', 'dblp.uni-trier.de']
+    root_domain = ['dblp.uni-trier.de', 'dblp.org']
     url_template = "https://{}/search/publ/api?q={}&h=1000&format=json"
     
     QproDefaultStatus("正在搜索...").start()
@@ -335,11 +412,15 @@ def dblp(keyword: str, is_exact: bool = False, venue: str = '', year: int = 0, j
             if r.status_code == 200:
                 break
             time.sleep(1)
-        if 'Error 500: Internal Server Error' not in r.text:
+        if 'Error 500: Internal Server Error' in r.text:
+            QproDefaultStatus.stop()
+            QproDefaultConsole.print(QproErrorString, "Error 500: Internal Server Error")
+            return
+        elif 'hit' not in r.json()['result']['hits']:
+            QproDefaultConsole.print(QproWarnString, "Domain No result:", domain)
+            continue
+        else:
             break
-    if 'Error 500: Internal Server Error' in r.text:
-        QproDefaultConsole.print(QproErrorString, "Error 500: Internal Server Error")
-        return
     data = r.json()
     QproDefaultStatus("搜索完成").stop()
     if 'hit' not in data['result']['hits']:
@@ -357,19 +438,16 @@ def dblp(keyword: str, is_exact: bool = False, venue: str = '', year: int = 0, j
                     index = _id
                     break
             data['result']['hits']['hit'].pop(index)
-        # 然后删除不包含关键词的数据
-        # delete = []
-        # for item in data['result']['hits']['hit']:
-        #     title = [i.lower() for i in item['info']['title'].strip().split()]
-        #     if keyword[:-1].lower() not in title:
-        #         delete.append(item['info']['ee'])
-        # for i in delete:
-        #     for _id, item in enumerate(data['result']['hits']['hit']):
-        #         if item['info']['ee'] == i:
-        #             index = _id
-        #             break
-        #     data['result']['hits']['hit'].pop(index)
-    with open(f"{raw_title}-{venue if venue else journal}.json", "w") as f:
+    
+    file_name = raw_title # f"{raw_title}-{venue if venue else journal}"
+    file_name += '-' if file_name else ''
+    if venue or journal:
+        file_name += venue if venue else journal
+    file_name += '-' if file_name else ''
+    if year:
+        file_name += f"{year}"
+    file_name += ".json"
+    with open(file_name, "w") as f:
         import json
         json.dump(data, f, ensure_ascii=False, indent=4)
 
